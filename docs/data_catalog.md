@@ -47,7 +47,7 @@ Gold 层为业务级数据模型，服务于分析和报表需求，包含维度
 
 ### 3.gold.fact_sales
 
--  **Purpose:** Stores transactional sales data for analytical purposes
+-  **Purpose:** 存储用于分析目的的交易销售数据
 - **Columns:**
 
 |  Column Name  |  Data Type   |                         Description                          |
