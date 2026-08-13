@@ -1,13 +1,19 @@
 <img width="1460" height="110" alt="image" src="https://github.com/user-attachments/assets/d2500665-fdf6-4221-aed3-edf497c70319" /># datawarehouse-by-migo-teach-by-baraa
 building a madern data warehouse with SQL Server, including ETL processes, data modeling, and analytics.
 
-# 跟着YouTube的baraa自学数据仓库、
+# 跟着YouTube的baraa自学数据仓库
 用法：
+
   1.下载到本地
+  
   2.打开数据库（sql server）
+  
   3.在数据库打开scripts里面的init_database.sql并运行（建立新库，和新schema）
+  
   4.打开bronze的两个SQL文件分别运行，先d后p，记得运行EXEC脚本（从本地加载数据）
+  
   5.打开Silver的两个SQL文件分别运行，先d后p，记得运行EXEC脚本（ETL）
+  
   6.打开gold的SQL文件并运行（搭建事实表和维度表，星型模型）
 
 ...
