@@ -27,7 +27,7 @@
 - **[Git 仓库](https://github.com/):** 创建 GitHub 账户和仓库，高效管理、版本控制以及协作代码。
 - **[DrawIO](https://www.drawio.com/):** 设计数据架构、模型、流程和图表。
 - **[Notion](https://www.notion.com/templates/sql-data-warehouse-project):** 获取 Notion 的项目模板。
-- **[Notion 项目步骤](https://thankful-pangolin-2ca.notion.site/SQL-Data-Warehouse-Project-16ed041640ef80489667cfe2f380b269?pvs=4):** 访问所有项目阶段和任务。
+- **[Notion 项目步骤](https://thankful-pangolin-2ca.notion.site/SQL-Data-Warehouse-Project-16ed041640ef80489667cfe2f380b269?pvs=4):** 访问所有项目阶段和任务。https://app.notion.com/p/3bc4428a16c180f58524d857e6b1371b?source=copy_link
 
 ---
 ## 项目要求
