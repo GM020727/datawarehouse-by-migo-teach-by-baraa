@@ -1,0 +1,201 @@
+import pandas as pd
+from pathlib import Path
+import gc
+import time
+from typing import List, Optional
+
+# ===================== 配置 =====================
+CONFIG = {
+    "input_dir": r"F:\数据",  # 存放分割文件的目录
+    "input_pattern": "原始数据_第*份.xlsx",  # 文件匹配模式
+    "sheet_name": "原始数据",  # 工作表名
+    "output_path": r"F:\数据\合并数据.xlsx",
+    "chunk_size": 10000,  # 分块读取大小
+    "engine": "openpyxl",
+}
+
+def get_excel_files(directory: str, pattern: str) -> List[Path]:
+    """
+    获取需要合并的Excel文件列表，按文件名排序
+    """
+    dir_path = Path(directory)
+    if not dir_path.exists():
+        raise FileNotFoundError(f"❌ 目录不存在: {directory}")
+    
+    # 使用glob匹配文件
+    files = sorted(dir_path.glob(pattern))
+    
+    if not files:
+        raise FileNotFoundError(f"❌ 未找到匹配的文件: {pattern}")
+    
+    print(f"📂 找到 {len(files)} 个文件:")
+    for f in files:
+        print(f"  📄 {f.name}")
+    
+    return files
+
+def get_file_row_count(file_path: Path, sheet_name: str, engine: str) -> int:
+    """
+    获取单个Excel文件的行数（不加载全部数据）
+    """
+    try:
+        excel = pd.ExcelFile(file_path, engine=engine)
+        df_col0 = excel.parse(sheet_name, usecols=[0], dtype=str)
+        rows = len(df_col0)
+        excel.close()
+        return rows
+    except Exception as e:
+        print(f"⚠️ 读取 {file_path.name} 行数失败: {e}")
+        return 0
+
+def merge_excel_files(
+    files: List[Path],
+    sheet_name: str,
+    output_path: Path,
+    chunk_size: int = 10000,
+    engine: str = "openpyxl"
+) -> int:
+    """
+    分块合并多个Excel文件（内存友好）
+    返回：合并后的总行数
+    """
+    print("-" * 60)
+    print(f"📁 输出文件: {output_path}")
+    print("⏳ 开始合并...")
+    start_time = time.time()
+    
+    total_rows = 0
+    file_count = 0
+    first_file = True
+    
+    # 创建ExcelWriter
+    writer = pd.ExcelWriter(output_path, engine=engine)
+    
+    try:
+        for file_path in files:
+            file_count += 1
+            print(f"\n📄 处理第 {file_count}/{len(files)} 个文件: {file_path.name}")
+            
+            # 获取当前文件总行数
+            file_rows = get_file_row_count(file_path, sheet_name, engine)
+            print(f"  📊 文件行数: {file_rows:,}")
+            
+            if file_rows == 0:
+                print("  ⚠️ 文件为空，跳过")
+                continue
+            
+            # 分块读取并写入
+            excel = pd.ExcelFile(file_path, engine=engine)
+            processed = 0
+            
+            # 读取表头（只读第一块时需要）
+            header_df = excel.parse(sheet_name, nrows=0)
+            columns = header_df.columns.tolist()
+            
+            for skip_rows in range(0, file_rows, chunk_size):
+                # 读取数据块
+                chunk = excel.parse(
+                    sheet_name,
+                    skiprows=skip_rows,
+                    nrows=chunk_size,
+                    dtype=str,
+                    keep_default_na=True,
+                    header=0 if skip_rows == 0 else None
+                )
+                
+                if skip_rows != 0 and chunk is not None:
+                    chunk.columns = columns
+                
+                if chunk is None or chunk.empty:
+                    break
+                
+                # 写入输出文件
+                if first_file and skip_rows == 0:
+                    # 第一个文件的第一个块，带表头
+                    chunk.to_excel(
+                        writer,
+                        sheet_name=sheet_name,
+                        index=False,
+                        header=True
+                    )
+                else:
+                    # 后续数据，不带表头，从已有行数后追加
+                    chunk.to_excel(
+                        writer,
+                        sheet_name=sheet_name,
+                        index=False,
+                        header=False,
+                        startrow=total_rows + 1  # +1 因为表头占一行
+                    )
+                
+                processed += len(chunk)
+                total_rows += len(chunk)
+                first_file = False
+                
+                print(f"  ⏳ 已处理: {processed:,}/{file_rows:,} 行 "
+                      f"({processed/file_rows*100:.1f}%)", end="\r")
+                
+                # 释放内存
+                del chunk
+                if skip_rows % (chunk_size * 5) == 0:
+                    gc.collect()
+            
+            excel.close()
+            print(f"\n  ✅ 文件 {file_path.name} 处理完成，累计 {total_rows:,} 行")
+            
+            # 定期清理
+            gc.collect()
+        
+        # 关闭writer
+        writer.close()
+        
+    except Exception as e:
+        print(f"\n❌ 合并失败: {e}")
+        writer.close()
+        # 删除不完整的输出文件
+        if output_path.exists():
+            output_path.unlink()
+        raise
+    
+    elapsed = time.time() - start_time
+    
+    print("-" * 60)
+    print(f"✅ 合并完成！")
+    print(f"📊 总行数: {total_rows:,}")
+    print(f"📁 输出文件: {output_path}")
+    print(f"📏 文件大小: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
+    print(f"⏱️ 耗时: {elapsed:.2f} 秒")
+    print("-" * 60)
+    
+    return total_rows
+
+def main():
+    """主函数"""
+    try:
+        # 获取文件列表
+        files = get_excel_files(
+            CONFIG["input_dir"],
+            CONFIG["input_pattern"]
+        )
+        
+        # 合并文件
+        output_path = Path(CONFIG["output_path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        total_rows = merge_excel_files(
+            files=files,
+            sheet_name=CONFIG["sheet_name"],
+            output_path=output_path,
+            chunk_size=CONFIG["chunk_size"],
+            engine=CONFIG["engine"]
+        )
+        
+        # 验证
+        print(f"\n🎉 合并成功！共 {total_rows:,} 行数据")
+        
+    except Exception as e:
+        print(f"❌ 程序执行失败: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
