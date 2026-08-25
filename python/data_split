@@ -1,0 +1,250 @@
+import pandas as pd
+import math
+from pathlib import Path
+import gc
+import time
+from typing import Optional, List, Tuple
+
+# ===================== 配置 =====================
+CONFIG = {
+    "input_path": r"F:\数据\原始数据.xlsx",
+    "sheet_name": "原始数据",
+    "output_dir": r"F:\数据",
+    "output_prefix": "原始数据_第",
+    "output_suffix": "份.xlsx",
+    "parts": 3,  # 分成几份
+    "chunk_size": 10000,  # 分块读取的大小（行数）
+    "engine": "openpyxl",  # Excel引擎
+}
+
+def get_excel_total_rows(file_path: str, sheet_name: str, engine: str = "openpyxl") -> int:
+    """
+    不加载全部数据，只获取总行数（省内存）
+    """
+    try:
+        # 方法1：读取第一列获取行数
+        excel = pd.ExcelFile(file_path, engine=engine)
+        df_col0 = excel.parse(sheet_name, usecols=[0], dtype=str)
+        total_rows = len(df_col0)
+        excel.close()
+        return total_rows
+    except Exception as e:
+        print(f"⚠️ 获取行数失败: {e}")
+        # 方法2：回退到读取全部（不推荐大文件）
+        excel = pd.ExcelFile(file_path, engine=engine)
+        df = excel.parse(sheet_name, dtype=str, nrows=1)
+        # 逐块读取来计数
+        total_rows = 0
+        chunk_size = 10000
+        for chunk in pd.read_excel(file_path, sheet_name=sheet_name, 
+                                   dtype=str, chunksize=chunk_size):
+            total_rows += len(chunk)
+            if total_rows > 0:
+                # 只取第一列来节省内存
+                pass
+        excel.close()
+        return total_rows
+
+def split_excel_chunk_wise(
+    input_path: str,
+    sheet_name: str,
+    output_dir: str,
+    prefix: str,
+    suffix: str,
+    parts: int = 3,
+    chunk_size: int = 10000,
+    engine: str = "openpyxl"
+) -> List[Tuple[str, int]]:
+    """
+    分块读取Excel并切分成多个文件（内存友好）
+    
+    返回：[(输出文件路径, 行数), ...]
+    """
+    # 确保输出目录存在
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    print(f"📂 输入文件: {input_path}")
+    print(f"📁 输出目录: {output_dir_path}")
+    print(f"📊 分成 {parts} 份")
+    print("-" * 60)
+    
+    # 获取总行数（不加载全部数据）
+    print("⏳ 正在统计总行数...")
+    total_rows = get_excel_total_rows(input_path, sheet_name, engine)
+    
+    if total_rows == 0:
+        raise ValueError("❌ 文件为空或无法读取")
+    
+    print(f"📊 总数据行数: {total_rows:,}")
+    
+    # 计算每份大小
+    part_size = math.ceil(total_rows / parts)
+    print(f"📐 每份约: {part_size:,} 行")
+    print("-" * 60)
+    
+    # 预创建输出文件列表
+    output_files = []
+    for i in range(parts):
+        start_row = i * part_size
+        end_row = min((i + 1) * part_size, total_rows)
+        output_file = output_dir_path / f"{prefix}{i+1}{suffix}"
+        output_files.append({
+            "file": str(output_file),
+            "start": start_row,
+            "end": end_row,
+            "rows": end_row - start_row
+        })
+    
+    # 分块处理 - 降低内存占用
+    print("⏳ 开始分块处理和写入...")
+    start_time = time.time()
+    
+    # 初始化写入状态
+    writer_handles = {}
+    writers = {}
+    row_counters = {}
+    
+    try:
+        # 打开Excel文件
+        excel = pd.ExcelFile(input_path, engine=engine)
+        
+        # 读取表头
+        header_df = excel.parse(sheet_name, nrows=0)
+        columns = header_df.columns.tolist()
+        
+        # 初始化每个输出文件的ExcelWriter
+        for i, info in enumerate(output_files):
+            writer = pd.ExcelWriter(info["file"], engine=engine)
+            writers[i] = writer
+            row_counters[i] = 0
+        
+        # 分块读取数据并写入对应文件
+        chunk_num = 0
+        processed_rows = 0
+        
+        for skip_rows in range(0, total_rows, chunk_size):
+            # 读取数据块
+            chunk = excel.parse(
+                sheet_name,
+                skiprows=skip_rows,
+                nrows=chunk_size,
+                dtype=str,
+                keep_default_na=True,
+                header=0 if skip_rows == 0 else None
+            )
+            
+            if skip_rows != 0:
+                chunk.columns = columns
+            
+            if chunk.empty:
+                break
+            
+            chunk_num += 1
+            chunk_start_row = skip_rows
+            chunk_end_row = skip_rows + len(chunk)
+            
+            # 判断这块数据应该分配到哪些输出文件
+            for i, info in enumerate(output_files):
+                # 计算当前块与第i份的交集
+                overlap_start = max(chunk_start_row, info["start"])
+                overlap_end = min(chunk_end_row, info["end"])
+                
+                if overlap_start < overlap_end:
+                    # 计算在chunk中的偏移
+                    slice_start = overlap_start - chunk_start_row
+                    slice_end = overlap_end - chunk_start_row
+                    
+                    # 提取属于该份的数据
+                    part_chunk = chunk.iloc[slice_start:slice_end].copy()
+                    
+                    # 写入该份文件
+                    if row_counters[i] == 0:
+                        # 第一次写入，带表头
+                        part_chunk.to_excel(
+                            writers[i],
+                            sheet_name=sheet_name,
+                            index=False,
+                            header=True
+                        )
+                    else:
+                        # 追加写入，不带表头
+                        part_chunk.to_excel(
+                            writers[i],
+                            sheet_name=sheet_name,
+                            index=False,
+                            header=False,
+                            startrow=row_counters[i] + 1  # +1 因为表头占一行
+                        )
+                    
+                    row_counters[i] += len(part_chunk)
+            
+            processed_rows += len(chunk)
+            print(f"⏳ 已处理: {processed_rows:,}/{total_rows:,} 行 "
+                  f"({processed_rows/total_rows*100:.1f}%)", end="\r")
+            
+            # 释放内存
+            del chunk
+            if chunk_num % 10 == 0:
+                gc.collect()
+        
+        print("\n")  # 换行
+        
+        # 关闭所有writer
+        for i, writer in writers.items():
+            writer.close()
+        
+        excel.close()
+        
+    except Exception as e:
+        print(f"\n❌ 处理失败: {e}")
+        # 清理资源
+        for writer in writers.values():
+            try:
+                writer.close()
+            except:
+                pass
+        raise
+    
+    # 统计结果
+    elapsed = time.time() - start_time
+    print("-" * 60)
+    print(f"✅ 切分完成！耗时: {elapsed:.2f} 秒")
+    print("-" * 60)
+    
+    results = []
+    for i, info in enumerate(output_files):
+        actual_rows = row_counters[i]
+        results.append((info["file"], actual_rows))
+        print(f"📄 第{i+1}份: {actual_rows:,} 行 → {info['file']}")
+    
+    return results
+
+def main():
+    """主函数"""
+    try:
+        results = split_excel_chunk_wise(
+            input_path=CONFIG["input_path"],
+            sheet_name=CONFIG["sheet_name"],
+            output_dir=CONFIG["output_dir"],
+            prefix=CONFIG["output_prefix"],
+            suffix=CONFIG["output_suffix"],
+            parts=CONFIG["parts"],
+            chunk_size=CONFIG["chunk_size"],
+            engine=CONFIG["engine"]
+        )
+        
+        # 验证总行数
+        total = sum(rows for _, rows in results)
+        print("-" * 60)
+        print(f"📊 总计: {total:,} 行")
+        
+        # 清理内存
+        gc.collect()
+        
+    except Exception as e:
+        print(f"❌ 程序执行失败: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
