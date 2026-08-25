@@ -1,0 +1,106 @@
+import pandas as pd
+import numpy as np
+import gc
+
+# ===================== 配置项（已适配你的实际文件）=====================
+input_excel_path = r"F:\数据\原始数据.xlsx"
+output_clean_csv_path = r"F:\数据\clean_物流入库数据.csv"
+chunk_size = 5000          # 内存不够就调小到2000
+sheet_name = "原始数据"     # 工作表名
+
+# ===================== 工具函数 =====================
+def excel_serial_to_datetime(val):
+    """兼容Excel浮点序列号、标准日期字符串，空值/脏数据返回NaT"""
+    if pd.isna(val) or str(val).strip() == "":
+        return pd.NaT
+    s = str(val).strip()
+    try:
+        if s.replace(".", "").isdigit():
+            num = float(s)
+            return pd.to_datetime("1900-01-01") + pd.Timedelta(days=num - 2)
+        else:
+            return pd.to_datetime(s)
+    except Exception:
+        return pd.NaT
+
+# ===================== 字段分类 =====================
+datetime_cols = [
+    "订单日期", "收货日期", "最新库位时间", "收货时间", "理货时间",
+    "预计到仓时间", "到仓时间", "第一次入库时间", "测量完成时间", "数据确认时间"
+]
+
+int_cols = [
+    "订单件数", "收货件数", "入库件数", "理货件数", "库存件数", "暂扣", "出货件数", "是否入库"
+]
+
+float_cols = [
+    "订单实重", "订单体积", "收货实重", "收货体积", "收货材积",
+    "计费重", "司机提成重", "收费重", "销售收费重", "渠道收费重", "货量统计"
+]
+
+# ===================== Excel分块主逻辑 =====================
+excel_file = pd.ExcelFile(input_excel_path)
+
+# 先读取表头（列名），供后续块复用
+header_df = excel_file.parse(sheet_name, nrows=0)
+columns = header_df.columns.tolist()
+
+# 统计总行数（只读第一列，省内存）
+total_rows = excel_file.parse(sheet_name, usecols=[0]).shape[0]
+print(f"文件总行数：{total_rows}")
+
+chunk_idx = 0
+for skip_rows in range(0, total_rows, chunk_size):
+    chunk = excel_file.parse(
+        sheet_name,
+        skiprows=skip_rows,
+        nrows=chunk_size,
+        dtype=str,
+        keep_default_na=True,
+        header=0 if skip_rows == 0 else None
+    )
+    # 非第一块手动赋值列名
+    if skip_rows != 0:
+        chunk.columns = columns
+
+    if chunk.empty:
+        break
+
+    chunk_idx += 1
+    print(f"===== 正在处理第 {chunk_idx} 块，行数：{chunk.shape[0]} =====")
+
+    # 日期列转换
+    for col in datetime_cols:
+        chunk[col] = chunk[col].apply(excel_serial_to_datetime)
+
+    # 整数列
+    for col in int_cols:
+        chunk[col] = pd.to_numeric(chunk[col], errors="coerce").astype("Int64")
+
+    # 浮点列
+    for col in float_cols:
+        chunk[col] = pd.to_numeric(chunk[col], errors="coerce")
+
+    # 文本列空值处理
+    text_cols = [c for c in chunk.columns if c not in datetime_cols + int_cols + float_cols]
+    for col in text_cols:
+        chunk[col] = chunk[col].replace({"": None, np.nan: None})
+
+    # 写入csv，第一块写表头
+    write_header = True if skip_rows == 0 else False
+    chunk.to_csv(
+        output_clean_csv_path,
+        mode="a",
+        index=False,
+        header=write_header,
+        encoding="utf-8-sig",
+        na_rep=""
+    )
+
+    del chunk
+    gc.collect()
+    print(f"第 {chunk_idx} 块处理完成，已写入文件\n")
+
+excel_file.close()
+print("✅ 全部数据清洗完成！")
+print(f"输出文件：{output_clean_csv_path}")
